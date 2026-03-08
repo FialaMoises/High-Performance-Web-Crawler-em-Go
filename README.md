@@ -295,9 +295,9 @@ This project is licensed under the MIT License.
 
 ## 📧 Contact
 
-**Your Name**
-- GitHub: [@yourusername](https://github.com/yourusername)
-- LinkedIn: [Your Profile](https://linkedin.com/in/yourprofile)
+**Moises Fiala**
+- GitHub: [@FialaMoises](https://github.com/FialaMoises)
+- Project: [go-web-crawler](https://github.com/FialaMoises/go-web-crawler)
 
 ---
 
