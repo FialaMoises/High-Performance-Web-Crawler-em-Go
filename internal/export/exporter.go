@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/yourusername/go-web-crawler/internal/crawler"
+	"github.com/FialaMoises/go-web-crawler/internal/crawler"
 )
 
 // ResultData represents exported crawl data

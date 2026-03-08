@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yourusername/go-web-crawler/internal/config"
-	"github.com/yourusername/go-web-crawler/internal/crawler"
-	"github.com/yourusername/go-web-crawler/internal/export"
+	"github.com/FialaMoises/go-web-crawler/internal/config"
+	"github.com/FialaMoises/go-web-crawler/internal/crawler"
+	"github.com/FialaMoises/go-web-crawler/internal/export"
 )
 
 var (
@@ -74,7 +74,7 @@ func main() {
 		RateLimit:        *rateLimit,
 		SameDomainOnly:   *sameDomain,
 		RespectRobotsTxt: *respectRobots,
-		UserAgent:        fmt.Sprintf("GoWebCrawler/%s (+https://github.com/yourusername/go-web-crawler)", version),
+		UserAgent:        fmt.Sprintf("GoWebCrawler/%s (+https://github.com/FialaMoises/go-web-crawler)", version),
 		MaxRetries:       *maxRetries,
 		RetryDelay:       1 * time.Second,
 		PolitenessDelay:  500 * time.Millisecond,
@@ -109,7 +109,7 @@ func main() {
 	}()
 
 	// Start crawling
-	fmt.Println("\n🚀 Starting crawl...\n")
+	fmt.Println("\n🚀 Starting crawl...")
 
 	startTime := time.Now()
 	if err := c.Start(); err != nil {

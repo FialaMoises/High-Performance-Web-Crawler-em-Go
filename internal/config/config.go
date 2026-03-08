@@ -58,7 +58,7 @@ func DefaultConfig(startURL string) *Config {
 		RateLimit:        100,
 		SameDomainOnly:   true,
 		RespectRobotsTxt: true,
-		UserAgent:        "GoWebCrawler/1.0 (+https://github.com/yourusername/go-web-crawler)",
+		UserAgent:        "GoWebCrawler/1.0 (+https://github.com/FialaMoises/go-web-crawler)",
 		MaxRetries:       3,
 		RetryDelay:       1 * time.Second,
 		PolitenessDelay:  500 * time.Millisecond,

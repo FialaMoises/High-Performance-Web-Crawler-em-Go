@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/yourusername/go-web-crawler/internal/config"
-	"github.com/yourusername/go-web-crawler/internal/parser"
-	"github.com/yourusername/go-web-crawler/internal/storage"
+	"github.com/FialaMoises/go-web-crawler/internal/config"
+	"github.com/FialaMoises/go-web-crawler/internal/parser"
+	"github.com/FialaMoises/go-web-crawler/internal/storage"
 	"golang.org/x/time/rate"
 )
 
@@ -28,10 +28,10 @@ type Stats struct {
 // Crawler is the main crawler engine
 type Crawler struct {
 	config       *config.Config
-	queue        *Queue
-	visited      *storage.VisitedStore
-	parser       *parser.HTMLParser
-	robotsCache  *RobotsCache
+	queue        URLQueue
+	visited      URLStore
+	parser       URLParser
+	robotsCache  RobotsChecker
 	rateLimiter  *rate.Limiter
 	logger       *slog.Logger
 
@@ -145,89 +145,122 @@ func (c *Crawler) worker(id int) {
 	var lastAccessMu sync.Mutex
 
 	for {
-		// Check if we should stop
-		select {
-		case <-c.ctx.Done():
-			return
-		default:
-		}
-
-		// Check if we've reached max pages
-		if c.config.MaxPages > 0 && atomic.LoadInt64(&c.stats.PagesVisited) >= int64(c.config.MaxPages) {
+		if !c.shouldContinue() {
 			return
 		}
 
-		// Try to get a URL from the queue
-		item, ok := c.queue.TryDequeue()
+		item, ok := c.getNextItem()
 		if !ok {
-			// Queue is empty, check if we should exit
-			time.Sleep(100 * time.Millisecond)
-
-			// If queue is still empty and all workers are idle, we're done
-			if c.queue.IsEmpty() {
-				return
-			}
 			continue
 		}
 
-		// Check depth limit
-		if c.config.MaxDepth > 0 && item.Depth > c.config.MaxDepth {
+		if !c.shouldProcessItem(item, id) {
 			continue
 		}
 
-		// Check robots.txt if enabled
-		if c.config.RespectRobotsTxt && c.robotsCache != nil {
-			if !c.robotsCache.IsAllowed(c.ctx, item.URL) {
-				c.logger.Debug("URL disallowed by robots.txt",
-					"worker", id,
-					"url", item.URL,
-				)
-				continue
-			}
-		}
+		c.applyPoliteness(item.URL, &lastDomainAccess, &lastAccessMu)
 
-		// Apply rate limiting
-		if err := c.rateLimiter.Wait(c.ctx); err != nil {
-			return // Context cancelled
-		}
-
-		// Apply politeness delay for same domain
-		if c.config.PolitenessDelay > 0 {
-			domain, err := parser.GetDomain(item.URL)
-			if err == nil {
-				lastAccessMu.Lock()
-				if lastAccess, exists := lastDomainAccess[domain]; exists {
-					elapsed := time.Since(lastAccess)
-					if elapsed < c.config.PolitenessDelay {
-						time.Sleep(c.config.PolitenessDelay - elapsed)
-					}
-				}
-				lastDomainAccess[domain] = time.Now()
-				lastAccessMu.Unlock()
-			}
-		}
-
-		// Process the URL
 		result := w.Process(c.ctx, item.URL, item.Depth)
+		c.handleResult(result, item)
+	}
+}
 
-		// Update statistics
-		if result.Success {
-			atomic.AddInt64(&c.stats.PagesVisited, 1)
-			atomic.AddInt64(&c.stats.LinksFound, int64(len(result.Links)))
-			c.totalDuration.Add(result.Duration.Nanoseconds())
-		} else {
-			atomic.AddInt64(&c.stats.PagesFailed, 1)
+// shouldContinue checks if the worker should continue processing
+func (c *Crawler) shouldContinue() bool {
+	select {
+	case <-c.ctx.Done():
+		return false
+	default:
+	}
+
+	if c.config.MaxPages > 0 && atomic.LoadInt64(&c.stats.PagesVisited) >= int64(c.config.MaxPages) {
+		return false
+	}
+
+	return true
+}
+
+// getNextItem attempts to get the next URL from the queue
+func (c *Crawler) getNextItem() (URLItem, bool) {
+	item, ok := c.queue.TryDequeue()
+	if !ok {
+		time.Sleep(100 * time.Millisecond)
+		if c.queue.IsEmpty() {
+			return URLItem{}, false
 		}
+		return URLItem{}, false
+	}
+	return item, true
+}
 
-		// Store result
-		c.resultsMu.Lock()
-		c.results = append(c.results, result)
-		c.resultsMu.Unlock()
+// shouldProcessItem checks if an item should be processed
+func (c *Crawler) shouldProcessItem(item URLItem, workerID int) bool {
+	// Check depth limit
+	if c.config.MaxDepth > 0 && item.Depth > c.config.MaxDepth {
+		return false
+	}
 
-		// Process discovered links
-		if result.Success {
-			c.processLinks(result.Links, item.URL, item.Depth+1)
+	// Check robots.txt if enabled
+	if c.config.RespectRobotsTxt && c.robotsCache != nil {
+		if !c.robotsCache.IsAllowed(c.ctx, item.URL) {
+			c.logger.Debug("URL disallowed by robots.txt",
+				"worker", workerID,
+				"url", item.URL,
+			)
+			return false
 		}
+	}
+
+	// Apply rate limiting
+	if err := c.rateLimiter.Wait(c.ctx); err != nil {
+		return false
+	}
+
+	return true
+}
+
+// applyPoliteness applies politeness delay for the same domain
+func (c *Crawler) applyPoliteness(targetURL string, lastAccess *map[string]time.Time, mu *sync.Mutex) {
+	if c.config.PolitenessDelay <= 0 {
+		return
+	}
+
+	domain, err := parser.GetDomain(targetURL)
+	if err != nil {
+		return
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if lastTime, exists := (*lastAccess)[domain]; exists {
+		elapsed := time.Since(lastTime)
+		if elapsed < c.config.PolitenessDelay {
+			time.Sleep(c.config.PolitenessDelay - elapsed)
+		}
+	}
+	(*lastAccess)[domain] = time.Now()
+}
+
+// handleResult processes a worker result
+func (c *Crawler) handleResult(result WorkerResult, item URLItem) {
+	// Update statistics
+	if result.Success {
+		atomic.AddInt64(&c.stats.PagesVisited, 1)
+		atomic.AddInt64(&c.stats.LinksFound, int64(len(result.Links)))
+		c.totalDuration.Add(result.Duration.Nanoseconds())
+	} else {
+		atomic.AddInt64(&c.stats.PagesFailed, 1)
+	}
+
+	// Store result
+	c.resultsMu.Lock()
+	c.results = append(c.results, result)
+	c.resultsMu.Unlock()
+
+	// Process discovered links
+	if result.Success {
+		c.processLinks(result.Links, item.URL, item.Depth+1)
 	}
 }
 
