@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  crawler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: go-web-crawler:latest
+    container_name: web-crawler
+    volumes:
+      # Mount output directory to persist results
+      - ./output:/app/output
+    environment:
+      - TZ=UTC
+    # Override command with your crawl parameters
+    # Example: uncomment and modify the command below
+    # command: [
+    #   "-url", "https://books.toscrape.com",
+    #   "-depth", "3",
+    #   "-pages", "100",
+    #   "-workers", "10",
+    #   "-format", "both"
+    # ]
+
+    # Or keep it interactive
+    stdin_open: true
+    tty: true
+
+# Example configurations for different use cases:
+
+  # Example 1: Crawl books.toscrape.com
+  crawler-books:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: go-web-crawler:latest
+    container_name: crawler-books
+    volumes:
+      - ./output:/app/output
+    command: [
+      "-url", "https://books.toscrape.com",
+      "-depth", "3",
+      "-pages", "100",
+      "-workers", "5",
+      "-format", "both",
+      "-log-level", "info"
+    ]
+    profiles:
+      - examples
+
+  # Example 2: Crawl quotes.toscrape.com
+  crawler-quotes:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: go-web-crawler:latest
+    container_name: crawler-quotes
+    volumes:
+      - ./output:/app/output
+    command: [
+      "-url", "https://quotes.toscrape.com",
+      "-depth", "2",
+      "-pages", "50",
+      "-workers", "3",
+      "-format", "json",
+      "-log-level", "info"
+    ]
+    profiles:
+      - examples
+
+  # Example 3: Custom crawl with debug logging
+  crawler-debug:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: go-web-crawler:latest
+    container_name: crawler-debug
+    volumes:
+      - ./output:/app/output
+    command: [
+      "-url", "https://example.com",
+      "-depth", "1",
+      "-pages", "10",
+      "-workers", "2",
+      "-format", "both",
+      "-log-level", "debug"
+    ]
+    profiles:
+      - debug
