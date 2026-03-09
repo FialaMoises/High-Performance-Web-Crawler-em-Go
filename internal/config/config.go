@@ -45,6 +45,17 @@ type Config struct {
 
 	// OutputPath is the directory to save results
 	OutputPath string
+
+	// Authentication settings
+	RequiresAuth bool
+	LoginURL     string
+	Username     string
+	Password     string
+	AuthMethod   string // "form" or "token"
+
+	// JavaScript rendering settings
+	RenderJS       bool          // Enable JavaScript rendering with headless browser
+	JSTimeout      time.Duration // Timeout for JavaScript rendering
 }
 
 // DefaultConfig returns a Config with sensible defaults
@@ -64,6 +75,8 @@ func DefaultConfig(startURL string) *Config {
 		PolitenessDelay:  500 * time.Millisecond,
 		OutputFormat:     "both",
 		OutputPath:       "./output",
+		RenderJS:         false,
+		JSTimeout:        30 * time.Second,
 	}
 }
 
@@ -78,6 +91,27 @@ func (c *Config) Validate() error {
 	if c.RequestTimeout < 1*time.Second {
 		return &ConfigError{Field: "RequestTimeout", Message: "must be at least 1 second"}
 	}
+
+	// Validate authentication settings
+	if c.RequiresAuth {
+		if c.LoginURL == "" {
+			return &ConfigError{Field: "LoginURL", Message: "cannot be empty when authentication is required"}
+		}
+		if c.Username == "" {
+			return &ConfigError{Field: "Username", Message: "cannot be empty when authentication is required"}
+		}
+		if c.Password == "" {
+			return &ConfigError{Field: "Password", Message: "cannot be empty when authentication is required"}
+		}
+		if c.AuthMethod != "form" && c.AuthMethod != "token" && c.AuthMethod != "" {
+			return &ConfigError{Field: "AuthMethod", Message: "must be 'form' or 'token'"}
+		}
+		// Default to form if not specified
+		if c.AuthMethod == "" {
+			c.AuthMethod = "form"
+		}
+	}
+
 	return nil
 }
 

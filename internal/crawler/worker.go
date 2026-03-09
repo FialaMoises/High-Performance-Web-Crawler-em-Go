@@ -25,32 +25,29 @@ type WorkerResult struct {
 
 // Worker processes URLs from the queue
 type Worker struct {
-	id         int
-	client     *http.Client
-	userAgent  string
-	maxRetries int
-	retryDelay time.Duration
-	logger     *slog.Logger
+	id            int
+	client        *http.Client
+	userAgent     string
+	maxRetries    int
+	retryDelay    time.Duration
+	logger        *slog.Logger
+	authenticator *Authenticator
+	jsRenderer    *JSRenderer
+	renderJS      bool
 }
 
 // NewWorker creates a new Worker
-func NewWorker(id int, timeout time.Duration, userAgent string, maxRetries int, retryDelay time.Duration, logger *slog.Logger) *Worker {
+func NewWorker(id int, client *http.Client, userAgent string, maxRetries int, retryDelay time.Duration, logger *slog.Logger, auth *Authenticator, renderer *JSRenderer, renderJS bool) *Worker {
 	return &Worker{
-		id: id,
-		client: &http.Client{
-			Timeout: timeout,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				// Allow up to 10 redirects
-				if len(via) >= 10 {
-					return fmt.Errorf("stopped after 10 redirects")
-				}
-				return nil
-			},
-		},
-		userAgent:  userAgent,
-		maxRetries: maxRetries,
-		retryDelay: retryDelay,
-		logger:     logger,
+		id:            id,
+		client:        client, // Use shared client (with cookies)
+		userAgent:     userAgent,
+		maxRetries:    maxRetries,
+		retryDelay:    retryDelay,
+		logger:        logger,
+		authenticator: auth,
+		jsRenderer:    renderer,
+		renderJS:      renderJS,
 	}
 }
 
@@ -131,6 +128,12 @@ func (w *Worker) Process(ctx context.Context, url string, depth int) WorkerResul
 
 // fetchDocument fetches and parses an HTML document
 func (w *Worker) fetchDocument(ctx context.Context, url string) (*goquery.Document, error) {
+	// If JavaScript rendering is enabled, use headless browser
+	if w.renderJS && w.jsRenderer != nil {
+		return w.fetchWithJSRender(ctx, url)
+	}
+
+	// Otherwise, use standard HTTP request
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -140,11 +143,52 @@ func (w *Worker) fetchDocument(ctx context.Context, url string) (*goquery.Docume
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
+	// Add authentication headers if authenticator is present
+	if w.authenticator != nil {
+		w.authenticator.AddAuthToRequest(req)
+	}
+
 	resp, err := w.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Check for authentication errors and attempt re-login
+	if w.authenticator != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+		w.logger.Warn("Authentication error detected, attempting re-login",
+			"worker", w.id,
+			"url", url,
+			"status", resp.StatusCode,
+		)
+
+		// Attempt re-authentication
+		wasAuthError, authErr := w.authenticator.HandleAuthError(ctx, resp.StatusCode)
+		if wasAuthError && authErr == nil {
+			// Re-authentication successful, retry the request
+			w.logger.Info("Re-authentication successful, retrying request", "worker", w.id)
+
+			// Create new request
+			req, err = http.NewRequestWithContext(ctx, "GET", url, nil)
+			if err != nil {
+				return nil, fmt.Errorf("create retry request: %w", err)
+			}
+
+			req.Header.Set("User-Agent", w.userAgent)
+			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+			req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+			w.authenticator.AddAuthToRequest(req)
+
+			// Retry request
+			resp, err = w.client.Do(req)
+			if err != nil {
+				return nil, fmt.Errorf("http retry request: %w", err)
+			}
+			defer resp.Body.Close()
+		} else if wasAuthError && authErr != nil {
+			return nil, fmt.Errorf("re-authentication failed: %w", authErr)
+		}
+	}
 
 	// Check status code
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -164,6 +208,35 @@ func (w *Worker) fetchDocument(ctx context.Context, url string) (*goquery.Docume
 	doc, err := goquery.NewDocumentFromReader(limitedReader)
 	if err != nil {
 		return nil, fmt.Errorf("parse html: %w", err)
+	}
+
+	return doc, nil
+}
+
+// fetchWithJSRender fetches a page using headless browser with JavaScript rendering
+func (w *Worker) fetchWithJSRender(ctx context.Context, url string) (*goquery.Document, error) {
+	// Get authentication token if available
+	var authToken string
+	if w.authenticator != nil {
+		authToken = w.authenticator.GetToken()
+	}
+
+	w.logger.Debug("Rendering page with JavaScript",
+		"worker", w.id,
+		"url", url,
+		"has_auth", authToken != "",
+	)
+
+	// Render the page with JavaScript
+	html, err := w.jsRenderer.RenderPage(ctx, url, authToken)
+	if err != nil {
+		return nil, fmt.Errorf("render page with JS: %w", err)
+	}
+
+	// Parse the rendered HTML
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, fmt.Errorf("parse rendered html: %w", err)
 	}
 
 	return doc, nil

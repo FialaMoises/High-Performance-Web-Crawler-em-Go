@@ -41,6 +41,17 @@ func main() {
 		maxRetries    = flag.Int("retries", 3, "Maximum number of retries for failed requests")
 		logLevel      = flag.String("log-level", "info", "Log level: debug, info, warn, error")
 		showVersion   = flag.Bool("version", false, "Show version and exit")
+
+		// Authentication flags
+		requiresAuth = flag.Bool("auth", false, "Requires authentication")
+		loginURL     = flag.String("login-url", "", "Login URL for authentication")
+		username     = flag.String("username", "", "Username for authentication")
+		password     = flag.String("password", "", "Password for authentication")
+		authMethod   = flag.String("auth-method", "form", "Authentication method: form or token")
+
+		// JavaScript rendering flags
+		renderJS  = flag.Bool("render-js", false, "Enable JavaScript rendering with headless browser")
+		jsTimeout = flag.Int("js-timeout", 30, "Timeout for JavaScript rendering in seconds")
 	)
 
 	flag.Parse()
@@ -64,6 +75,19 @@ func main() {
 	// Setup logger
 	logger := setupLogger(*logLevel)
 
+	// Get authentication credentials from environment variables if not provided
+	authUsername := *username
+	authPassword := *password
+
+	if *requiresAuth {
+		if authUsername == "" {
+			authUsername = os.Getenv("CRAWLER_USERNAME")
+		}
+		if authPassword == "" {
+			authPassword = os.Getenv("CRAWLER_PASSWORD")
+		}
+	}
+
 	// Create configuration
 	cfg := &config.Config{
 		StartURL:         *startURL,
@@ -80,6 +104,17 @@ func main() {
 		PolitenessDelay:  500 * time.Millisecond,
 		OutputFormat:     *outputFormat,
 		OutputPath:       *outputPath,
+
+		// Authentication
+		RequiresAuth:     *requiresAuth,
+		LoginURL:         *loginURL,
+		Username:         authUsername,
+		Password:         authPassword,
+		AuthMethod:       *authMethod,
+
+		// JavaScript rendering
+		RenderJS:         *renderJS,
+		JSTimeout:        time.Duration(*jsTimeout) * time.Second,
 	}
 
 	// Validate configuration
@@ -168,15 +203,29 @@ func setupLogger(level string) *slog.Logger {
 // printConfig prints the crawler configuration
 func printConfig(cfg *config.Config) {
 	fmt.Println("📋 Configuration:")
-	fmt.Printf("  Start URL:        %s\n", cfg.StartURL)
-	fmt.Printf("  Max Depth:        %d\n", cfg.MaxDepth)
-	fmt.Printf("  Max Pages:        %d\n", cfg.MaxPages)
-	fmt.Printf("  Workers:          %d\n", cfg.NumWorkers)
-	fmt.Printf("  Rate Limit:       %d req/s\n", cfg.RateLimit)
-	fmt.Printf("  Same Domain Only: %t\n", cfg.SameDomainOnly)
+	fmt.Printf("  Start URL:          %s\n", cfg.StartURL)
+	fmt.Printf("  Max Depth:          %d\n", cfg.MaxDepth)
+	fmt.Printf("  Max Pages:          %d\n", cfg.MaxPages)
+	fmt.Printf("  Workers:            %d\n", cfg.NumWorkers)
+	fmt.Printf("  Rate Limit:         %d req/s\n", cfg.RateLimit)
+	fmt.Printf("  Same Domain Only:   %t\n", cfg.SameDomainOnly)
 	fmt.Printf("  Respect robots.txt: %t\n", cfg.RespectRobotsTxt)
-	fmt.Printf("  Output Format:    %s\n", cfg.OutputFormat)
-	fmt.Printf("  Output Path:      %s\n", cfg.OutputPath)
+	fmt.Printf("  Output Format:      %s\n", cfg.OutputFormat)
+	fmt.Printf("  Output Path:        %s\n", cfg.OutputPath)
+
+	if cfg.RequiresAuth {
+		fmt.Printf("  Authentication:     Enabled (%s)\n", cfg.AuthMethod)
+		fmt.Printf("  Login URL:          %s\n", cfg.LoginURL)
+		fmt.Printf("  Username:           %s\n", cfg.Username)
+	} else {
+		fmt.Printf("  Authentication:     Disabled\n")
+	}
+
+	if cfg.RenderJS {
+		fmt.Printf("  JavaScript Render:  Enabled (timeout: %s)\n", cfg.JSTimeout)
+	} else {
+		fmt.Printf("  JavaScript Render:  Disabled\n")
+	}
 }
 
 // printSummary prints crawl statistics

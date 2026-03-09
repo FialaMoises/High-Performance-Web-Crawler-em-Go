@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"sync"
 	"sync/atomic"
@@ -26,7 +28,13 @@ type Stats struct {
 }
 
 // Crawler is the main crawler engine
+// IMPORTANT: 64-bit atomic fields must be at the top of the struct for proper alignment on 32-bit systems
 type Crawler struct {
+	// Statistics (64-bit fields MUST come first for atomic operations)
+	stats        Stats
+	totalDuration atomic.Int64
+
+	// Configuration and dependencies
 	config       *config.Config
 	queue        URLQueue
 	visited      URLStore
@@ -34,10 +42,9 @@ type Crawler struct {
 	robotsCache  RobotsChecker
 	rateLimiter  *rate.Limiter
 	logger       *slog.Logger
-
-	// Statistics
-	stats        Stats
-	totalDuration atomic.Int64
+	httpClient   *http.Client
+	authenticator *Authenticator
+	jsRenderer    *JSRenderer
 
 	// Control
 	ctx          context.Context
@@ -62,6 +69,18 @@ func NewCrawler(cfg *config.Config, logger *slog.Logger) (*Crawler, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Create HTTP client with cookie jar (for session management)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("create cookie jar: %w", err)
+	}
+
+	httpClient := &http.Client{
+		Jar:     jar,
+		Timeout: cfg.RequestTimeout,
+	}
+
 	var robotsCache *RobotsCache
 	if cfg.RespectRobotsTxt {
 		robotsCache = NewRobotsCache(cfg.UserAgent, cfg.RequestTimeout)
@@ -70,17 +89,32 @@ func NewCrawler(cfg *config.Config, logger *slog.Logger) (*Crawler, error) {
 	// Create rate limiter (requests per second)
 	limiter := rate.NewLimiter(rate.Limit(cfg.RateLimit), cfg.RateLimit)
 
+	// Create authenticator if required
+	var auth *Authenticator
+	if cfg.RequiresAuth {
+		auth = NewAuthenticator(cfg, httpClient, logger)
+	}
+
+	// Create JavaScript renderer if required
+	var jsRenderer *JSRenderer
+	if cfg.RenderJS {
+		jsRenderer = NewJSRenderer(logger, cfg.JSTimeout)
+	}
+
 	c := &Crawler{
-		config:      cfg,
-		queue:       NewQueue(),
-		visited:     storage.NewVisitedStore(),
-		parser:      htmlParser,
-		robotsCache: robotsCache,
-		rateLimiter: limiter,
-		logger:      logger,
-		ctx:         ctx,
-		cancel:      cancel,
-		results:     make([]WorkerResult, 0),
+		config:        cfg,
+		queue:         NewQueue(),
+		visited:       storage.NewVisitedStore(),
+		parser:        htmlParser,
+		robotsCache:   robotsCache,
+		rateLimiter:   limiter,
+		logger:        logger,
+		httpClient:    httpClient,
+		authenticator: auth,
+		jsRenderer:    jsRenderer,
+		ctx:           ctx,
+		cancel:        cancel,
+		results:       make([]WorkerResult, 0),
 	}
 
 	return c, nil
@@ -95,6 +129,15 @@ func (c *Crawler) Start() error {
 		"max_pages", c.config.MaxPages,
 		"num_workers", c.config.NumWorkers,
 	)
+
+	// Perform authentication if required
+	if c.config.RequiresAuth && c.authenticator != nil {
+		c.logger.Info("Authentication required, logging in...")
+		if err := c.authenticator.Login(c.ctx); err != nil {
+			return fmt.Errorf("authentication failed: %w", err)
+		}
+		c.logger.Info("Authentication successful")
+	}
 
 	// Add seed URL to queue
 	c.queue.Enqueue(URLItem{URL: c.config.StartURL, Depth: 0})
@@ -138,8 +181,9 @@ func (c *Crawler) Stop() {
 func (c *Crawler) worker(id int) {
 	defer c.wg.Done()
 
-	w := NewWorker(id, c.config.RequestTimeout, c.config.UserAgent,
-		c.config.MaxRetries, c.config.RetryDelay, c.logger)
+	w := NewWorker(id, c.httpClient, c.config.UserAgent,
+		c.config.MaxRetries, c.config.RetryDelay, c.logger, c.authenticator,
+		c.jsRenderer, c.config.RenderJS)
 
 	lastDomainAccess := make(map[string]time.Time)
 	var lastAccessMu sync.Mutex

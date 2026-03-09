@@ -26,8 +26,21 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 # Stage 2: Runtime
 FROM alpine:latest
 
-# Install runtime dependencies
-RUN apk --no-cache add ca-certificates tzdata
+# Install runtime dependencies including Chromium for JavaScript rendering
+RUN apk --no-cache add \
+    ca-certificates \
+    tzdata \
+    chromium \
+    chromium-chromedriver \
+    nss \
+    freetype \
+    harfbuzz \
+    ttf-freefont \
+    && rm -rf /var/cache/apk/*
+
+# Set Chromium environment variables
+ENV CHROME_BIN=/usr/bin/chromium-browser \
+    CHROME_PATH=/usr/lib/chromium/
 
 # Create non-root user
 RUN addgroup -g 1000 crawler && \
